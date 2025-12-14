@@ -23,43 +23,31 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Determine platform
-      id: platform
+    - name: Run requirecodeowners
       shell: bash
+      env:
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_CODEOWNERS_PATH: ${{ inputs.codeowners-path }}
+        INPUT_VERSION: ${{ inputs.version }}
       run: |
+        echo "::group::Setup"
         OS=$(uname -s | tr '[:upper:]' '[:lower:]')
         ARCH=$(uname -m)
-        if [ "$ARCH" = "x86_64" ]; then
-          ARCH="amd64"
-        elif [ "$ARCH" = "aarch64" ]; then
-          ARCH="arm64"
-        fi
-        echo "os=$OS" >> "$GITHUB_OUTPUT"
-        echo "arch=$ARCH" >> "$GITHUB_OUTPUT"
+        [[ "$ARCH" == "x86_64" ]] && ARCH="amd64"
+        [[ "$ARCH" == "aarch64" ]] && ARCH="arm64"
 
-    - name: Download requirecodeowners
-      shell: bash
-      run: |
-        OS="${{ steps.platform.outputs.os }}"
-        ARCH="${{ steps.platform.outputs.arch }}"
-        VERSION="${{ inputs.version }}"
-        if [ "$VERSION" = "latest" ]; then
+        if [[ "$INPUT_VERSION" == "latest" ]]; then
           URL="https://github.com/kpurdon/requirecodeowners/releases/latest/download/requirecodeowners_${OS}_${ARCH}"
         else
-          URL="https://github.com/kpurdon/requirecodeowners/releases/download/${VERSION}/requirecodeowners_${OS}_${ARCH}"
+          URL="https://github.com/kpurdon/requirecodeowners/releases/download/${INPUT_VERSION}/requirecodeowners_${OS}_${ARCH}"
         fi
-        echo "Downloading $URL"
-        curl -sL "$URL" -o /tmp/requirecodeowners
-        chmod +x /tmp/requirecodeowners
 
-    - name: Run validation
-      shell: bash
-      run: |
+        curl -sSL "$URL" -o /tmp/requirecodeowners
+        chmod +x /tmp/requirecodeowners
+        echo "::endgroup::"
+
         ARGS=""
-        if [ -n "${{ inputs.config }}" ]; then
-          ARGS="--config=${{ inputs.config }}"
-        fi
-        if [ -n "${{ inputs.codeowners-path }}" ]; then
-          ARGS="$ARGS --codeowners-path=${{ inputs.codeowners-path }}"
-        fi
+        [[ -n "$INPUT_CONFIG" ]] && ARGS="--config=$INPUT_CONFIG"
+        [[ -n "$INPUT_CODEOWNERS_PATH" ]] && ARGS="$ARGS --codeowners-path=$INPUT_CODEOWNERS_PATH"
+
         /tmp/requirecodeowners $ARGS
