@@ -107,7 +107,7 @@ func parseCodeownersFile(path string) (codeowners.Ruleset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	return codeowners.ParseFile(f)
 }
 
