@@ -153,51 +153,98 @@ func pluralize(n int, singular, plural string) string {
 	return plural
 }
 
+func expandPath(pattern string) ([]string, error) {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("invalid pattern: %w", err)
+	}
+
+	// Filter to only directories
+	var dirs []string
+	for _, match := range matches {
+		info, err := os.Stat(match)
+		if err != nil {
+			continue
+		}
+		if info.IsDir() {
+			dirs = append(dirs, match)
+		}
+	}
+	return dirs, nil
+}
+
 func validate(specs []dirSpec, ruleset codeowners.Ruleset, configPath string) []validationError {
 	var errors []validationError
 
 	for _, spec := range specs {
-		info, err := os.Stat(spec.Path)
-		if os.IsNotExist(err) {
-			errors = append(errors, validationError{
-				path:    spec.Path,
-				message: fmt.Sprintf("Directory not found. Create it or remove from %s.", configPath),
-			})
-			continue
-		}
+		matchedDirs, err := expandPath(spec.Path)
 		if err != nil {
-			errors = append(errors, validationError{path: spec.Path, message: fmt.Sprintf("Cannot access: %v", err)})
-			continue
-		}
-		if !info.IsDir() {
 			errors = append(errors, validationError{
 				path:    spec.Path,
-				message: fmt.Sprintf("Expected a directory but found a file. Check %s.", configPath),
+				message: fmt.Sprintf("Invalid path pattern: %v", err),
+			})
+			continue
+		}
+		if len(matchedDirs) == 0 {
+			errors = append(errors, validationError{
+				path:    spec.Path,
+				message: fmt.Sprintf("No directories match this path. Check %s.", configPath),
 			})
 			continue
 		}
 
-		dirsToCheck, err := getDirsAtLevel(spec.Path, spec.Level)
-		if err != nil {
-			errors = append(errors, validationError{path: spec.Path, message: fmt.Sprintf("Cannot read: %v", err)})
-			continue
+		for _, dir := range matchedDirs {
+			errs := validateDirectory(dir, spec.Level, ruleset, configPath)
+			errors = append(errors, errs...)
 		}
+	}
 
-		if spec.Level > 0 && len(dirsToCheck) == 0 {
+	return errors
+}
+
+func validateDirectory(path string, level int, ruleset codeowners.Ruleset, configPath string) []validationError {
+	var errors []validationError
+
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		errors = append(errors, validationError{
+			path:    path,
+			message: fmt.Sprintf("Directory not found. Create it or remove from %s.", configPath),
+		})
+		return errors
+	}
+	if err != nil {
+		errors = append(errors, validationError{path: path, message: fmt.Sprintf("Cannot access: %v", err)})
+		return errors
+	}
+	if !info.IsDir() {
+		errors = append(errors, validationError{
+			path:    path,
+			message: fmt.Sprintf("Expected a directory but found a file. Check %s.", configPath),
+		})
+		return errors
+	}
+
+	dirsToCheck, err := getDirsAtLevel(path, level)
+	if err != nil {
+		errors = append(errors, validationError{path: path, message: fmt.Sprintf("Cannot read: %v", err)})
+		return errors
+	}
+
+	if level > 0 && len(dirsToCheck) == 0 {
+		errors = append(errors, validationError{
+			path:    path,
+			message: fmt.Sprintf("No subdirectories found at level %d. Add subdirectories or set level to 0 in %s.", level, configPath),
+		})
+		return errors
+	}
+
+	for _, d := range dirsToCheck {
+		if !hasCodeownersCoverage(ruleset, d) {
 			errors = append(errors, validationError{
-				path:    spec.Path,
-				message: fmt.Sprintf("No subdirectories found at level %d. Add subdirectories or set level to 0 in %s.", spec.Level, configPath),
+				path:    d,
+				message: fmt.Sprintf("Not covered by CODEOWNERS. Add: /%s/ @your-team", d),
 			})
-			continue
-		}
-
-		for _, d := range dirsToCheck {
-			if !hasCodeownersCoverage(ruleset, d) {
-				errors = append(errors, validationError{
-					path:    d,
-					message: fmt.Sprintf("Not covered by CODEOWNERS. Add: /%s/ @your-team", d),
-				})
-			}
 		}
 	}
 

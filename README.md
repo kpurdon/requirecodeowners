@@ -35,6 +35,18 @@ That's it! The action will fail if any configured directories lack CODEOWNERS en
 | `1` | Check immediate subdirectories | Each `services/*/` must have an entry |
 | `2` | Check two levels deep | Each `services/*/*/` must have an entry |
 
+### Glob patterns
+
+Paths support glob patterns using `*`:
+
+```yaml
+directories:
+  - path: applications/*/services
+    level: 1
+```
+
+This matches `applications/a/services`, `applications/b/services`, etc., and checks that each of their subdirectories has CODEOWNERS coverage.
+
 ### Full example
 
 ```yaml

@@ -230,6 +230,56 @@ func TestValidateWithLevel(t *testing.T) {
 	}
 }
 
+func TestValidateWithGlob(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create directory structure: apps/a/services/foo, apps/b/services/bar
+	os.MkdirAll(filepath.Join(tmpDir, "apps", "a", "services", "foo"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "apps", "a", "services", "bar"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "apps", "b", "services", "baz"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, ".github"), 0755)
+
+	// Only foo and bar have owners, baz is missing
+	os.WriteFile(filepath.Join(tmpDir, ".github", "CODEOWNERS"), []byte(`/apps/a/services/foo/ @team-foo
+/apps/a/services/bar/ @team-bar
+`), 0644)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	ruleset, err := loadCodeowners("")
+	if err != nil {
+		t.Fatalf("loading CODEOWNERS: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		specs    []dirSpec
+		wantErrs int
+	}{
+		{
+			name:     "glob matches multiple dirs",
+			specs:    []dirSpec{{Path: "apps/*/services", Level: 1}},
+			wantErrs: 1, // baz in apps/b/services is missing
+		},
+		{
+			name:     "glob with no matches",
+			specs:    []dirSpec{{Path: "nonexistent/*/path", Level: 0}},
+			wantErrs: 1, // no directories match
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validate(tt.specs, ruleset, ".requirecodeowners.yml")
+			if len(errs) != tt.wantErrs {
+				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
+			}
+		})
+	}
+}
+
 func TestGetDirsAtLevel(t *testing.T) {
 	tmpDir := t.TempDir()
 
