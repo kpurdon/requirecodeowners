@@ -16,23 +16,13 @@ inputs:
     required: false
     default: ""
   version:
-    description: "Version of requirecodeowners to use (defaults to action version)"
+    description: "Version of requirecodeowners to use"
     required: false
-    default: ""
+    default: "v0"
 
 runs:
   using: "composite"
   steps:
-    - name: Determine version
-      id: version
-      shell: bash
-      run: |
-        if [ -n "${{ inputs.version }}" ]; then
-          echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
-        else
-          echo "version=${{ github.action_ref }}" >> "$GITHUB_OUTPUT"
-        fi
-
     - name: Determine platform
       id: platform
       shell: bash
@@ -50,7 +40,7 @@ runs:
     - name: Download requirecodeowners
       shell: bash
       run: |
-        VERSION="${{ steps.version.outputs.version }}"
+        VERSION="${{ inputs.version }}"
         OS="${{ steps.platform.outputs.os }}"
         ARCH="${{ steps.platform.outputs.arch }}"
         URL="https://github.com/kpurdon/requirecodeowners/releases/download/${VERSION}/requirecodeowners_${OS}_${ARCH}"
