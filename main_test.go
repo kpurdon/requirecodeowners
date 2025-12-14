@@ -158,7 +158,7 @@ func TestValidate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := validate(tt.specs, ruleset)
+			errs := validate(tt.specs, ruleset, ".requirecodeowners.yml")
 			if len(errs) != tt.wantErrs {
 				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
 			}
@@ -222,7 +222,7 @@ func TestValidateWithLevel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := validate(tt.specs, ruleset)
+			errs := validate(tt.specs, ruleset, ".requirecodeowners.yml")
 			if len(errs) != tt.wantErrs {
 				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
 			}

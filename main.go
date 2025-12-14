@@ -50,7 +50,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	errors := validate(cfg.Directories, ruleset)
+	actualConfigPath := configPath
+	if actualConfigPath == "" {
+		actualConfigPath = ".requirecodeowners.yml"
+	}
+
+	errors := validate(cfg.Directories, ruleset, actualConfigPath)
 	if len(errors) > 0 {
 		printErrors(errors)
 		os.Exit(1)
@@ -148,7 +153,7 @@ func pluralize(n int, singular, plural string) string {
 	return plural
 }
 
-func validate(specs []dirSpec, ruleset codeowners.Ruleset) []validationError {
+func validate(specs []dirSpec, ruleset codeowners.Ruleset, configPath string) []validationError {
 	var errors []validationError
 
 	for _, spec := range specs {
@@ -156,32 +161,32 @@ func validate(specs []dirSpec, ruleset codeowners.Ruleset) []validationError {
 		if os.IsNotExist(err) {
 			errors = append(errors, validationError{
 				path:    spec.Path,
-				message: "directory does not exist. Create it or remove from .requirecodeowners.yml",
+				message: fmt.Sprintf("Directory not found. Create it or remove from %s.", configPath),
 			})
 			continue
 		}
 		if err != nil {
-			errors = append(errors, validationError{path: spec.Path, message: fmt.Sprintf("error: %v", err)})
+			errors = append(errors, validationError{path: spec.Path, message: fmt.Sprintf("Cannot access: %v", err)})
 			continue
 		}
 		if !info.IsDir() {
 			errors = append(errors, validationError{
 				path:    spec.Path,
-				message: "path is a file, not a directory. Update .requirecodeowners.yml",
+				message: fmt.Sprintf("Expected a directory but found a file. Check %s.", configPath),
 			})
 			continue
 		}
 
 		dirsToCheck, err := getDirsAtLevel(spec.Path, spec.Level)
 		if err != nil {
-			errors = append(errors, validationError{path: spec.Path, message: fmt.Sprintf("error reading: %v", err)})
+			errors = append(errors, validationError{path: spec.Path, message: fmt.Sprintf("Cannot read: %v", err)})
 			continue
 		}
 
 		if spec.Level > 0 && len(dirsToCheck) == 0 {
 			errors = append(errors, validationError{
 				path:    spec.Path,
-				message: fmt.Sprintf("no subdirectories at level %d. Create subdirectories or set level: 0", spec.Level),
+				message: fmt.Sprintf("No subdirectories found at level %d. Add subdirectories or set level to 0 in %s.", spec.Level, configPath),
 			})
 			continue
 		}
@@ -190,7 +195,7 @@ func validate(specs []dirSpec, ruleset codeowners.Ruleset) []validationError {
 			if !hasCodeownersCoverage(ruleset, d) {
 				errors = append(errors, validationError{
 					path:    d,
-					message: fmt.Sprintf("missing CODEOWNERS entry. Add to CODEOWNERS: /%s/ @owner", d),
+					message: fmt.Sprintf("Not covered by CODEOWNERS. Add: /%s/ @your-team", d),
 				})
 			}
 		}
