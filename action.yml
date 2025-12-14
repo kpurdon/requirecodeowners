@@ -18,7 +18,7 @@ inputs:
   version:
     description: "Version of requirecodeowners to use"
     required: false
-    default: "v0"
+    default: "latest"
 
 runs:
   using: "composite"
@@ -40,10 +40,14 @@ runs:
     - name: Download requirecodeowners
       shell: bash
       run: |
-        VERSION="${{ inputs.version }}"
         OS="${{ steps.platform.outputs.os }}"
         ARCH="${{ steps.platform.outputs.arch }}"
-        URL="https://github.com/kpurdon/requirecodeowners/releases/download/${VERSION}/requirecodeowners_${OS}_${ARCH}"
+        VERSION="${{ inputs.version }}"
+        if [ "$VERSION" = "latest" ]; then
+          URL="https://github.com/kpurdon/requirecodeowners/releases/latest/download/requirecodeowners_${OS}_${ARCH}"
+        else
+          URL="https://github.com/kpurdon/requirecodeowners/releases/download/${VERSION}/requirecodeowners_${OS}_${ARCH}"
+        fi
         echo "Downloading $URL"
         curl -sL "$URL" -o /tmp/requirecodeowners
         chmod +x /tmp/requirecodeowners
