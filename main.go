@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/hmarr/codeowners"
 	"gopkg.in/yaml.v3"
@@ -17,6 +18,11 @@ type config struct {
 type dirSpec struct {
 	Path  string `yaml:"path"`
 	Level int    `yaml:"level"`
+}
+
+type validationError struct {
+	path    string
+	message string
 }
 
 func main() {
@@ -46,14 +52,38 @@ func main() {
 
 	errors := validate(cfg.Directories, ruleset)
 	if len(errors) > 0 {
-		fmt.Fprintln(os.Stderr, "validation failed:")
-		for _, e := range errors {
-			fmt.Fprintf(os.Stderr, "  - %s\n", e)
-		}
+		printErrors(errors)
 		os.Exit(1)
 	}
 
-	fmt.Println("all directories have CODEOWNERS entries")
+	fmt.Println("✓ all directories have CODEOWNERS coverage")
+}
+
+func printErrors(errors []validationError) {
+	// Sort by path for consistent output
+	sort.Slice(errors, func(i, j int) bool {
+		return errors[i].path < errors[j].path
+	})
+
+	// Text output to stderr (for console)
+	fmt.Fprintln(os.Stderr)
+	for _, e := range errors {
+		fmt.Fprintf(os.Stderr, "  ✗ %s\n", e.path)
+		fmt.Fprintf(os.Stderr, "    %s\n", e.message)
+	}
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintf(os.Stderr, "✗ %d %s failed CODEOWNERS check\n", len(errors), pluralize(len(errors), "directory", "directories"))
+
+	// Markdown output to stdout (for GitHub Actions summary)
+	fmt.Println("## ❌ CODEOWNERS Check Failed")
+	fmt.Println()
+	fmt.Println("| Path | Issue |")
+	fmt.Println("|------|-------|")
+	for _, e := range errors {
+		fmt.Printf("| `%s` | %s |\n", e.path, e.message)
+	}
+	fmt.Println()
+	fmt.Printf("**%d %s** need attention.\n", len(errors), pluralize(len(errors), "directory", "directories"))
 }
 
 func loadConfig(path string) (*config, error) {
@@ -111,38 +141,57 @@ func parseCodeownersFile(path string) (codeowners.Ruleset, error) {
 	return codeowners.ParseFile(f)
 }
 
-func validate(specs []dirSpec, ruleset codeowners.Ruleset) []string {
-	var errors []string
+func pluralize(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
+}
+
+func validate(specs []dirSpec, ruleset codeowners.Ruleset) []validationError {
+	var errors []validationError
 
 	for _, spec := range specs {
 		info, err := os.Stat(spec.Path)
 		if os.IsNotExist(err) {
-			errors = append(errors, fmt.Sprintf("directory does not exist: %s", spec.Path))
+			errors = append(errors, validationError{
+				path:    spec.Path,
+				message: "directory does not exist. Create it or remove from .requirecodeowners.yml",
+			})
 			continue
 		}
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("checking directory %s: %v", spec.Path, err))
+			errors = append(errors, validationError{path: spec.Path, message: fmt.Sprintf("error: %v", err)})
 			continue
 		}
 		if !info.IsDir() {
-			errors = append(errors, fmt.Sprintf("not a directory: %s", spec.Path))
+			errors = append(errors, validationError{
+				path:    spec.Path,
+				message: "path is a file, not a directory. Update .requirecodeowners.yml",
+			})
 			continue
 		}
 
 		dirsToCheck, err := getDirsAtLevel(spec.Path, spec.Level)
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("reading directory %s: %v", spec.Path, err))
+			errors = append(errors, validationError{path: spec.Path, message: fmt.Sprintf("error reading: %v", err)})
 			continue
 		}
 
 		if spec.Level > 0 && len(dirsToCheck) == 0 {
-			errors = append(errors, fmt.Sprintf("no subdirectories found at level %d in: %s", spec.Level, spec.Path))
+			errors = append(errors, validationError{
+				path:    spec.Path,
+				message: fmt.Sprintf("no subdirectories at level %d. Create subdirectories or set level: 0", spec.Level),
+			})
 			continue
 		}
 
 		for _, d := range dirsToCheck {
 			if !hasCodeownersCoverage(ruleset, d) {
-				errors = append(errors, fmt.Sprintf("no CODEOWNERS entry covers: %s", d))
+				errors = append(errors, validationError{
+					path:    d,
+					message: fmt.Sprintf("missing CODEOWNERS entry. Add to CODEOWNERS: /%s/ @owner", d),
+				})
 			}
 		}
 	}

@@ -46,4 +46,4 @@ runs:
 
     - name: Require CODEOWNERS
       shell: bash
-      run: /tmp/requirecodeowners ${{ steps.setup.outputs.args }}
+      run: /tmp/requirecodeowners ${{ steps.setup.outputs.args }} >> "$GITHUB_STEP_SUMMARY"
