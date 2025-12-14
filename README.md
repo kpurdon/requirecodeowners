@@ -2,43 +2,40 @@
 
 A GitHub Action that validates specified directories have corresponding CODEOWNERS entries.
 
+## Configuration
+
+Create `.requirecodeowners.yml` in your repository root:
+
+```yaml
+directories:
+  - path: services
+    level: 1        # check immediate subdirectories
+  - path: libs
+    level: 2        # check two levels deep
+  - path: src       # level defaults to 0 (check directory itself)
+```
+
+### Level explained
+
+- `level: 0` (default) - check that the directory itself has a CODEOWNERS entry
+- `level: 1` - check that each immediate subdirectory has a CODEOWNERS entry
+- `level: 2` - check subdirectories two levels deep, etc.
+
 ## Usage
 
 ```yaml
 - uses: kpurdon/requirecodeowners@v1
-  with:
-    directories: |
-      src/
-      pkg/
-      internal/
 ```
 
-### Check subdirectories
+The action reads `.requirecodeowners.yml` from your repository root.
 
-Use `level` to check subdirectories instead of the directory itself:
-
-```yaml
-# Given services/foo/, services/bar/, services/baz/
-# This ensures each subdirectory has a CODEOWNERS entry
-- uses: kpurdon/requirecodeowners@v1
-  with:
-    directories: services
-    level: 1
-```
-
-## Inputs
+### Action inputs
 
 | Name | Required | Default | Description |
 |------|----------|---------|-------------|
-| `directories` | Yes | | Newline-separated list of directories to validate |
-| `level` | No | `0` | Directory depth to check (0=directory itself, 1=immediate subdirs, etc.) |
-| `codeowners-path` | No | | Path to CODEOWNERS file (auto-detected from `.github/CODEOWNERS`, `CODEOWNERS`, or `docs/CODEOWNERS`) |
-| `version` | No | | Version of requirecodeowner to use (defaults to action version) |
-
-## What it checks
-
-1. Each specified directory (or subdirectory at the given level) exists
-2. Each directory has a CODEOWNERS entry that covers it
+| `config` | No | `.requirecodeowners.yml` | Path to config file |
+| `codeowners-path` | No | auto-detected | Path to CODEOWNERS file |
+| `version` | No | action version | Version of requirecodeowners to use |
 
 ## Example workflow
 
@@ -50,6 +47,7 @@ on:
     paths:
       - "CODEOWNERS"
       - ".github/CODEOWNERS"
+      - ".requirecodeowners.yml"
 
 jobs:
   validate:
@@ -57,17 +55,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: kpurdon/requirecodeowners@v1
-        with:
-          directories: services
-          level: 1
 ```
 
 ## CLI Usage
 
 ```bash
-# Check directory itself
-requirecodeowners --directories="src,pkg"
+# Uses .requirecodeowners.yml in current directory
+requirecodeowners
 
-# Check immediate subdirectories
-requirecodeowners --directories="services" --level=1
+# Use custom config location
+requirecodeowners --config path/to/config.yml
 ```

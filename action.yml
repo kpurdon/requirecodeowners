@@ -7,19 +7,16 @@ branding:
   color: "blue"
 
 inputs:
-  directories:
-    description: "Newline-separated list of directories that must have CODEOWNERS entries"
-    required: true
+  config:
+    description: "Path to config file (default: .requirecodeowners.yml)"
+    required: false
+    default: ""
   codeowners-path:
     description: "Path to CODEOWNERS file (auto-detected if not specified)"
     required: false
     default: ""
-  level:
-    description: "Directory depth to check (0=directory itself, 1=immediate subdirs, etc.)"
-    required: false
-    default: "0"
   version:
-    description: "Version of requirecodeowner to use (defaults to action version)"
+    description: "Version of requirecodeowners to use (defaults to action version)"
     required: false
     default: ""
 
@@ -50,7 +47,7 @@ runs:
         echo "os=$OS" >> "$GITHUB_OUTPUT"
         echo "arch=$ARCH" >> "$GITHUB_OUTPUT"
 
-    - name: Download requirecodeowner
+    - name: Download requirecodeowners
       shell: bash
       run: |
         VERSION="${{ steps.version.outputs.version }}"
@@ -64,7 +61,10 @@ runs:
     - name: Run validation
       shell: bash
       run: |
-        ARGS="--directories=${{ inputs.directories }} --level=${{ inputs.level }}"
+        ARGS=""
+        if [ -n "${{ inputs.config }}" ]; then
+          ARGS="--config=${{ inputs.config }}"
+        fi
         if [ -n "${{ inputs.codeowners-path }}" ]; then
           ARGS="$ARGS --codeowners-path=${{ inputs.codeowners-path }}"
         fi

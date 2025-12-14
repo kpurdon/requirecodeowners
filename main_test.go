@@ -9,47 +9,91 @@ import (
 	"github.com/hmarr/codeowners"
 )
 
-func TestParseDirectories(t *testing.T) {
+func TestLoadConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+
 	tests := []struct {
-		name  string
-		input string
-		want  []string
+		name    string
+		content string
+		wantErr bool
+		errMsg  string
 	}{
 		{
-			name:  "newline separated",
-			input: "src\npkg\ninternal",
-			want:  []string{"src", "pkg", "internal"},
+			name: "valid config",
+			content: `directories:
+  - path: src
+    level: 0
+  - path: services
+    level: 1
+`,
+			wantErr: false,
 		},
 		{
-			name:  "comma separated",
-			input: "src,pkg,internal",
-			want:  []string{"src", "pkg", "internal"},
+			name: "missing path",
+			content: `directories:
+  - level: 1
+`,
+			wantErr: true,
+			errMsg:  "has no path",
 		},
 		{
-			name:  "mixed with whitespace",
-			input: "src\n  pkg  \n\ninternal",
-			want:  []string{"src", "pkg", "internal"},
+			name: "negative level",
+			content: `directories:
+  - path: src
+    level: -1
+`,
+			wantErr: true,
+			errMsg:  "invalid level",
 		},
 		{
-			name:  "empty",
-			input: "",
-			want:  nil,
+			name:    "invalid yaml",
+			content: `not: valid: yaml:`,
+			wantErr: true,
+			errMsg:  "parsing config",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseDirectories(tt.input)
-			if len(got) != len(tt.want) {
-				t.Errorf("parseDirectories() = %v, want %v", got, tt.want)
-				return
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("parseDirectories()[%d] = %v, want %v", i, got[i], tt.want[i])
+			configPath := filepath.Join(tmpDir, tt.name+".yml")
+			os.WriteFile(configPath, []byte(tt.content), 0644)
+
+			cfg, err := loadConfig(configPath)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("loadConfig() expected error containing %q, got nil", tt.errMsg)
+				} else if !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("loadConfig() error = %v, want error containing %q", err, tt.errMsg)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("loadConfig() unexpected error: %v", err)
+				}
+				if cfg == nil {
+					t.Error("loadConfig() returned nil config")
 				}
 			}
 		})
+	}
+}
+
+func TestLoadConfigDefaultPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, ".requirecodeowners.yml")
+	os.WriteFile(configPath, []byte(`directories:
+  - path: src
+`), 0644)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	cfg, err := loadConfig("")
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if len(cfg.Directories) != 1 {
+		t.Errorf("loadConfig() got %d directories, want 1", len(cfg.Directories))
 	}
 }
 
@@ -65,11 +109,9 @@ func TestValidate(t *testing.T) {
 	os.WriteFile(filepath.Join(tmpDir, "file.txt"), []byte("test"), 0644)
 
 	// Create CODEOWNERS
-	codeownersContent := `/src/ @team-a
-`
-	os.WriteFile(filepath.Join(tmpDir, ".github", "CODEOWNERS"), []byte(codeownersContent), 0644)
+	os.WriteFile(filepath.Join(tmpDir, ".github", "CODEOWNERS"), []byte(`/src/ @team-a
+`), 0644)
 
-	// Change to temp dir
 	oldWd, _ := os.Getwd()
 	os.Chdir(tmpDir)
 	defer os.Chdir(oldWd)
@@ -81,45 +123,42 @@ func TestValidate(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		dirs     []string
-		level    int
+		specs    []dirSpec
 		wantErrs int
 	}{
 		{
 			name:     "covered directory passes",
-			dirs:     []string{"src"},
-			level:    0,
+			specs:    []dirSpec{{Path: "src", Level: 0}},
 			wantErrs: 0,
 		},
 		{
 			name:     "uncovered directory fails",
-			dirs:     []string{"pkg"},
-			level:    0,
+			specs:    []dirSpec{{Path: "pkg", Level: 0}},
 			wantErrs: 1,
 		},
 		{
 			name:     "nonexistent directory fails",
-			dirs:     []string{"nonexistent"},
-			level:    0,
+			specs:    []dirSpec{{Path: "nonexistent", Level: 0}},
 			wantErrs: 1,
 		},
 		{
 			name:     "file instead of directory fails",
-			dirs:     []string{"file.txt"},
-			level:    0,
+			specs:    []dirSpec{{Path: "file.txt", Level: 0}},
 			wantErrs: 1,
 		},
 		{
-			name:     "multiple directories mixed results",
-			dirs:     []string{"src", "pkg", "nonexistent"},
-			level:    0,
-			wantErrs: 2,
+			name: "multiple directories mixed results",
+			specs: []dirSpec{
+				{Path: "src", Level: 0},
+				{Path: "pkg", Level: 0},
+			},
+			wantErrs: 1,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := validate(tt.dirs, ruleset, tt.level)
+			errs := validate(tt.specs, ruleset)
 			if len(errs) != tt.wantErrs {
 				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
 			}
@@ -130,12 +169,7 @@ func TestValidate(t *testing.T) {
 func TestValidateWithLevel(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create directory structure:
-	// services/
-	//   foo/
-	//   bar/
-	//   baz/
-	// empty/ (no subdirs)
+	// Create directory structure
 	os.MkdirAll(filepath.Join(tmpDir, "services", "foo"), 0755)
 	os.MkdirAll(filepath.Join(tmpDir, "services", "bar"), 0755)
 	os.MkdirAll(filepath.Join(tmpDir, "services", "baz"), 0755)
@@ -143,10 +177,9 @@ func TestValidateWithLevel(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpDir, ".github"), 0755)
 
 	// Create CODEOWNERS - only foo and bar have owners
-	codeownersContent := `/services/foo/ @team-foo
+	os.WriteFile(filepath.Join(tmpDir, ".github", "CODEOWNERS"), []byte(`/services/foo/ @team-foo
 /services/bar/ @team-bar
-`
-	os.WriteFile(filepath.Join(tmpDir, ".github", "CODEOWNERS"), []byte(codeownersContent), 0644)
+`), 0644)
 
 	oldWd, _ := os.Getwd()
 	os.Chdir(tmpDir)
@@ -159,33 +192,37 @@ func TestValidateWithLevel(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		dirs     []string
-		level    int
+		specs    []dirSpec
 		wantErrs int
 	}{
 		{
 			name:     "level 0 checks services itself",
-			dirs:     []string{"services"},
-			level:    0,
+			specs:    []dirSpec{{Path: "services", Level: 0}},
 			wantErrs: 1, // services/ has no owner
 		},
 		{
 			name:     "level 1 checks subdirs - baz missing",
-			dirs:     []string{"services"},
-			level:    1,
+			specs:    []dirSpec{{Path: "services", Level: 1}},
 			wantErrs: 1, // baz has no owner
 		},
 		{
 			name:     "level 1 with no subdirs errors",
-			dirs:     []string{"empty"},
-			level:    1,
+			specs:    []dirSpec{{Path: "empty", Level: 1}},
 			wantErrs: 1, // no subdirs to check
+		},
+		{
+			name: "mixed levels",
+			specs: []dirSpec{
+				{Path: "services", Level: 1},
+				{Path: "empty", Level: 0},
+			},
+			wantErrs: 2, // baz missing + empty uncovered
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := validate(tt.dirs, ruleset, tt.level)
+			errs := validate(tt.specs, ruleset)
 			if len(errs) != tt.wantErrs {
 				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
 			}
@@ -200,7 +237,6 @@ func TestGetDirsAtLevel(t *testing.T) {
 	os.MkdirAll(filepath.Join(tmpDir, "a", "b", "c"), 0755)
 	os.MkdirAll(filepath.Join(tmpDir, "a", "b", "d"), 0755)
 	os.MkdirAll(filepath.Join(tmpDir, "a", "e"), 0755)
-	// Create a file to ensure it's ignored
 	os.WriteFile(filepath.Join(tmpDir, "a", "file.txt"), []byte("test"), 0644)
 
 	tests := []struct {
@@ -241,7 +277,6 @@ func TestGetDirsAtLevel(t *testing.T) {
 				t.Errorf("getDirsAtLevel() = %v, want %v", got, tt.want)
 				return
 			}
-			// Sort both for comparison since directory order may vary
 			for _, w := range tt.want {
 				found := false
 				for _, g := range got {
@@ -261,7 +296,6 @@ func TestGetDirsAtLevel(t *testing.T) {
 func TestLoadCodeowners(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Test auto-detection from .github/
 	os.MkdirAll(filepath.Join(tmpDir, ".github"), 0755)
 	os.WriteFile(filepath.Join(tmpDir, ".github", "CODEOWNERS"), []byte("/src/ @team\n"), 0644)
 
@@ -279,7 +313,6 @@ func TestLoadCodeowners(t *testing.T) {
 }
 
 func TestHasCodeownersCoverage(t *testing.T) {
-	// Create a ruleset from string
 	content := `/src/ @team-a
 /pkg/** @team-b
 internal/ @team-c

@@ -5,34 +5,36 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/hmarr/codeowners"
+	"gopkg.in/yaml.v3"
 )
 
-func main() {
-	var directories string
-	var codeownersPath string
-	var level int
+type config struct {
+	Directories []dirSpec `yaml:"directories"`
+}
 
-	flag.StringVar(&directories, "directories", "", "newline or comma separated list of directories to validate")
+type dirSpec struct {
+	Path  string `yaml:"path"`
+	Level int    `yaml:"level"`
+}
+
+func main() {
+	var configPath string
+	var codeownersPath string
+
+	flag.StringVar(&configPath, "config", "", "path to config file (default: .requirecodeowners.yml)")
 	flag.StringVar(&codeownersPath, "codeowners-path", "", "path to CODEOWNERS file (auto-detected if not specified)")
-	flag.IntVar(&level, "level", 0, "directory depth to check (0=directory itself, 1=immediate subdirs, etc.)")
 	flag.Parse()
 
-	if level < 0 {
-		fmt.Fprintln(os.Stderr, "error: --level must be >= 0")
+	cfg, err := loadConfig(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
-	if directories == "" {
-		fmt.Fprintln(os.Stderr, "error: --directories is required")
-		os.Exit(1)
-	}
-
-	dirs := parseDirectories(directories)
-	if len(dirs) == 0 {
-		fmt.Fprintln(os.Stderr, "error: no directories provided")
+	if len(cfg.Directories) == 0 {
+		fmt.Fprintln(os.Stderr, "error: no directories configured")
 		os.Exit(1)
 	}
 
@@ -42,7 +44,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	errors := validate(dirs, ruleset, level)
+	errors := validate(cfg.Directories, ruleset)
 	if len(errors) > 0 {
 		fmt.Fprintln(os.Stderr, "validation failed:")
 		for _, e := range errors {
@@ -54,19 +56,32 @@ func main() {
 	fmt.Println("all directories have CODEOWNERS entries")
 }
 
-func parseDirectories(input string) []string {
-	// Handle both newline and comma separated
-	input = strings.ReplaceAll(input, ",", "\n")
-	lines := strings.Split(input, "\n")
+func loadConfig(path string) (*config, error) {
+	if path == "" {
+		path = ".requirecodeowners.yml"
+	}
 
-	var dirs []string
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			dirs = append(dirs, trimmed)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading config file %s: %w", path, err)
+	}
+
+	var cfg config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing config file: %w", err)
+	}
+
+	// Validate config
+	for i, d := range cfg.Directories {
+		if d.Path == "" {
+			return nil, fmt.Errorf("directory at index %d has no path", i)
+		}
+		if d.Level < 0 {
+			return nil, fmt.Errorf("directory %s has invalid level %d (must be >= 0)", d.Path, d.Level)
 		}
 	}
-	return dirs
+
+	return &cfg, nil
 }
 
 func loadCodeowners(path string) (codeowners.Ruleset, error) {
@@ -74,7 +89,6 @@ func loadCodeowners(path string) (codeowners.Ruleset, error) {
 		return parseCodeownersFile(path)
 	}
 
-	// Try standard locations
 	locations := []string{
 		".github/CODEOWNERS",
 		"CODEOWNERS",
@@ -97,33 +111,32 @@ func parseCodeownersFile(path string) (codeowners.Ruleset, error) {
 	return codeowners.ParseFile(f)
 }
 
-func validate(dirs []string, ruleset codeowners.Ruleset, level int) []string {
+func validate(specs []dirSpec, ruleset codeowners.Ruleset) []string {
 	var errors []string
 
-	for _, dir := range dirs {
-		info, err := os.Stat(dir)
+	for _, spec := range specs {
+		info, err := os.Stat(spec.Path)
 		if os.IsNotExist(err) {
-			errors = append(errors, fmt.Sprintf("directory does not exist: %s", dir))
+			errors = append(errors, fmt.Sprintf("directory does not exist: %s", spec.Path))
 			continue
 		}
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("checking directory %s: %v", dir, err))
+			errors = append(errors, fmt.Sprintf("checking directory %s: %v", spec.Path, err))
 			continue
 		}
 		if !info.IsDir() {
-			errors = append(errors, fmt.Sprintf("not a directory: %s", dir))
+			errors = append(errors, fmt.Sprintf("not a directory: %s", spec.Path))
 			continue
 		}
 
-		// Get directories at the specified level
-		dirsToCheck, err := getDirsAtLevel(dir, level)
+		dirsToCheck, err := getDirsAtLevel(spec.Path, spec.Level)
 		if err != nil {
-			errors = append(errors, fmt.Sprintf("reading directory %s: %v", dir, err))
+			errors = append(errors, fmt.Sprintf("reading directory %s: %v", spec.Path, err))
 			continue
 		}
 
-		if level > 0 && len(dirsToCheck) == 0 {
-			errors = append(errors, fmt.Sprintf("no subdirectories found at level %d in: %s", level, dir))
+		if spec.Level > 0 && len(dirsToCheck) == 0 {
+			errors = append(errors, fmt.Sprintf("no subdirectories found at level %d in: %s", spec.Level, spec.Path))
 			continue
 		}
 
@@ -164,8 +177,6 @@ func getDirsAtLevel(dir string, level int) ([]string, error) {
 func hasCodeownersCoverage(ruleset codeowners.Ruleset, dir string) bool {
 	dir = filepath.Clean(dir)
 
-	// Check if any rule covers this directory
-	// Try multiple path variants to handle different pattern styles
 	testPaths := []string{
 		dir,
 		dir + "/",
