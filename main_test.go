@@ -82,40 +82,177 @@ func TestValidate(t *testing.T) {
 	tests := []struct {
 		name     string
 		dirs     []string
+		level    int
 		wantErrs int
 	}{
 		{
 			name:     "covered directory passes",
 			dirs:     []string{"src"},
+			level:    0,
 			wantErrs: 0,
 		},
 		{
 			name:     "uncovered directory fails",
 			dirs:     []string{"pkg"},
+			level:    0,
 			wantErrs: 1,
 		},
 		{
 			name:     "nonexistent directory fails",
 			dirs:     []string{"nonexistent"},
+			level:    0,
 			wantErrs: 1,
 		},
 		{
 			name:     "file instead of directory fails",
 			dirs:     []string{"file.txt"},
+			level:    0,
 			wantErrs: 1,
 		},
 		{
 			name:     "multiple directories mixed results",
 			dirs:     []string{"src", "pkg", "nonexistent"},
+			level:    0,
 			wantErrs: 2,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := validate(tt.dirs, ruleset)
+			errs := validate(tt.dirs, ruleset, tt.level)
 			if len(errs) != tt.wantErrs {
 				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
+			}
+		})
+	}
+}
+
+func TestValidateWithLevel(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create directory structure:
+	// services/
+	//   foo/
+	//   bar/
+	//   baz/
+	// empty/ (no subdirs)
+	os.MkdirAll(filepath.Join(tmpDir, "services", "foo"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "services", "bar"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "services", "baz"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "empty"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, ".github"), 0755)
+
+	// Create CODEOWNERS - only foo and bar have owners
+	codeownersContent := `/services/foo/ @team-foo
+/services/bar/ @team-bar
+`
+	os.WriteFile(filepath.Join(tmpDir, ".github", "CODEOWNERS"), []byte(codeownersContent), 0644)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	ruleset, err := loadCodeowners("")
+	if err != nil {
+		t.Fatalf("loading CODEOWNERS: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		dirs     []string
+		level    int
+		wantErrs int
+	}{
+		{
+			name:     "level 0 checks services itself",
+			dirs:     []string{"services"},
+			level:    0,
+			wantErrs: 1, // services/ has no owner
+		},
+		{
+			name:     "level 1 checks subdirs - baz missing",
+			dirs:     []string{"services"},
+			level:    1,
+			wantErrs: 1, // baz has no owner
+		},
+		{
+			name:     "level 1 with no subdirs errors",
+			dirs:     []string{"empty"},
+			level:    1,
+			wantErrs: 1, // no subdirs to check
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validate(tt.dirs, ruleset, tt.level)
+			if len(errs) != tt.wantErrs {
+				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
+			}
+		})
+	}
+}
+
+func TestGetDirsAtLevel(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create nested structure
+	os.MkdirAll(filepath.Join(tmpDir, "a", "b", "c"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "a", "b", "d"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "a", "e"), 0755)
+	// Create a file to ensure it's ignored
+	os.WriteFile(filepath.Join(tmpDir, "a", "file.txt"), []byte("test"), 0644)
+
+	tests := []struct {
+		name    string
+		dir     string
+		level   int
+		want    []string
+		wantErr bool
+	}{
+		{
+			name:  "level 0 returns dir itself",
+			dir:   filepath.Join(tmpDir, "a"),
+			level: 0,
+			want:  []string{filepath.Join(tmpDir, "a")},
+		},
+		{
+			name:  "level 1 returns immediate subdirs",
+			dir:   filepath.Join(tmpDir, "a"),
+			level: 1,
+			want:  []string{filepath.Join(tmpDir, "a", "b"), filepath.Join(tmpDir, "a", "e")},
+		},
+		{
+			name:  "level 2 returns nested subdirs",
+			dir:   filepath.Join(tmpDir, "a"),
+			level: 2,
+			want:  []string{filepath.Join(tmpDir, "a", "b", "c"), filepath.Join(tmpDir, "a", "b", "d")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getDirsAtLevel(tt.dir, tt.level)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getDirsAtLevel() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Errorf("getDirsAtLevel() = %v, want %v", got, tt.want)
+				return
+			}
+			// Sort both for comparison since directory order may vary
+			for _, w := range tt.want {
+				found := false
+				for _, g := range got {
+					if g == w {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("getDirsAtLevel() missing %s, got %v", w, got)
+				}
 			}
 		})
 	}

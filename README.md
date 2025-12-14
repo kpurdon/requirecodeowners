@@ -1,11 +1,11 @@
-# requirecodeowner
+# requirecodeowners
 
 A GitHub Action that validates specified directories have corresponding CODEOWNERS entries.
 
 ## Usage
 
 ```yaml
-- uses: kpurdon/requirecodeowner@v1
+- uses: kpurdon/requirecodeowners@v1
   with:
     directories: |
       src/
@@ -13,17 +13,31 @@ A GitHub Action that validates specified directories have corresponding CODEOWNE
       internal/
 ```
 
+### Check subdirectories
+
+Use `level` to check subdirectories instead of the directory itself:
+
+```yaml
+# Given services/foo/, services/bar/, services/baz/
+# This ensures each subdirectory has a CODEOWNERS entry
+- uses: kpurdon/requirecodeowners@v1
+  with:
+    directories: services
+    level: 1
+```
+
 ## Inputs
 
-| Name | Required | Description |
-|------|----------|-------------|
-| `directories` | Yes | Newline-separated list of directories that must have CODEOWNERS entries |
-| `codeowners-path` | No | Path to CODEOWNERS file (auto-detected from `.github/CODEOWNERS`, `CODEOWNERS`, or `docs/CODEOWNERS`) |
-| `version` | No | Version of requirecodeowner to use (defaults to action version) |
+| Name | Required | Default | Description |
+|------|----------|---------|-------------|
+| `directories` | Yes | | Newline-separated list of directories to validate |
+| `level` | No | `0` | Directory depth to check (0=directory itself, 1=immediate subdirs, etc.) |
+| `codeowners-path` | No | | Path to CODEOWNERS file (auto-detected from `.github/CODEOWNERS`, `CODEOWNERS`, or `docs/CODEOWNERS`) |
+| `version` | No | | Version of requirecodeowner to use (defaults to action version) |
 
 ## What it checks
 
-1. Each specified directory exists
+1. Each specified directory (or subdirectory at the given level) exists
 2. Each directory has a CODEOWNERS entry that covers it
 
 ## Example workflow
@@ -42,17 +56,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: kpurdon/requirecodeowner@v1
+      - uses: kpurdon/requirecodeowners@v1
         with:
-          directories: |
-            src/
-            pkg/
+          directories: services
+          level: 1
 ```
 
 ## CLI Usage
 
-The underlying CLI can also be used directly:
-
 ```bash
-requirecodeowner --directories="src,pkg,internal"
+# Check directory itself
+requirecodeowners --directories="src,pkg"
+
+# Check immediate subdirectories
+requirecodeowners --directories="services" --level=1
 ```

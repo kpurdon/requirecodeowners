@@ -1,4 +1,4 @@
-module github.com/kpurdon/requirecodeowner
+module github.com/kpurdon/requirecodeowners
 
 go 1.23
 
