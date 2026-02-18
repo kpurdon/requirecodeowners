@@ -18,6 +18,7 @@ type config struct {
 type dirSpec struct {
 	Path  string `yaml:"path"`
 	Level int    `yaml:"level"`
+	Match string `yaml:"match"`
 }
 
 type validationError struct {
@@ -114,6 +115,9 @@ func loadConfig(path string) (*config, error) {
 		if d.Level < 0 {
 			return nil, fmt.Errorf("directory %s has invalid level %d (must be >= 0)", d.Path, d.Level)
 		}
+		if d.Match != "" && d.Match != "exact" && d.Match != "coverage" {
+			return nil, fmt.Errorf("directory %s has invalid match %q (must be \"exact\" or \"coverage\")", d.Path, d.Match)
+		}
 	}
 
 	return &cfg, nil
@@ -193,8 +197,13 @@ func validate(specs []dirSpec, ruleset codeowners.Ruleset, configPath string) []
 			continue
 		}
 
+		matchMode := spec.Match
+		if matchMode == "" {
+			matchMode = "exact"
+		}
+
 		for _, dir := range matchedDirs {
-			errs := validateDirectory(dir, spec.Level, ruleset, configPath)
+			errs := validateDirectory(dir, spec.Level, matchMode, ruleset, configPath)
 			errors = append(errors, errs...)
 		}
 	}
@@ -202,7 +211,7 @@ func validate(specs []dirSpec, ruleset codeowners.Ruleset, configPath string) []
 	return errors
 }
 
-func validateDirectory(path string, level int, ruleset codeowners.Ruleset, configPath string) []validationError {
+func validateDirectory(path string, level int, matchMode string, ruleset codeowners.Ruleset, configPath string) []validationError {
 	var errors []validationError
 
 	info, err := os.Stat(path)
@@ -240,11 +249,24 @@ func validateDirectory(path string, level int, ruleset codeowners.Ruleset, confi
 	}
 
 	for _, d := range dirsToCheck {
-		if !hasCodeownersCoverage(ruleset, d) {
-			errors = append(errors, validationError{
-				path:    d,
-				message: fmt.Sprintf("Not covered by CODEOWNERS. Add: /%s/ @your-team", d),
-			})
+		if matchMode == "coverage" {
+			if !hasCodeownersCoverage(ruleset, d) {
+				errors = append(errors, validationError{
+					path:    d,
+					message: fmt.Sprintf("Not covered by CODEOWNERS. Add: /%s/ @your-team", d),
+				})
+			}
+		} else {
+			if !hasExactCodeownersCoverage(ruleset, d) {
+				msg := fmt.Sprintf("Not covered by CODEOWNERS. Add: /%s/ @your-team", d)
+				if hasCodeownersCoverage(ruleset, d) {
+					msg = fmt.Sprintf("Covered by parent CODEOWNERS rule but missing exact entry. Add: /%s/ @your-team", d)
+				}
+				errors = append(errors, validationError{
+					path:    d,
+					message: msg,
+				})
+			}
 		}
 	}
 
@@ -273,6 +295,24 @@ func getDirsAtLevel(dir string, level int) ([]string, error) {
 		results = append(results, subdirs...)
 	}
 	return results, nil
+}
+
+func hasExactCodeownersCoverage(ruleset codeowners.Ruleset, dir string) bool {
+	dir = filepath.Clean(dir)
+
+	rule, _ := ruleset.Match(dir + "/file.txt")
+	if rule == nil || len(rule.Owners) == 0 {
+		return false
+	}
+
+	// If the parent matches the same rule pattern, this dir is only covered by inheritance
+	parent := filepath.Dir(dir)
+	parentRule, _ := ruleset.Match(parent + "/file.txt")
+	if parentRule != nil && rule.RawPattern() == parentRule.RawPattern() {
+		return false
+	}
+
+	return true
 }
 
 func hasCodeownersCoverage(ruleset codeowners.Ruleset, dir string) bool {
