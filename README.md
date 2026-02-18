@@ -27,6 +27,27 @@ That's it! The action will fail if any configured directories lack CODEOWNERS en
 
 ## Configuration
 
+### Match mode
+
+Controls how CODEOWNERS coverage is checked for each directory:
+
+| Mode | Behavior |
+|------|----------|
+| `exact` (default) | Directory must have its own CODEOWNERS rule. Inheritance from a parent rule is not sufficient. |
+| `coverage` | Directory only needs to be covered by any CODEOWNERS rule, including inherited parent rules. |
+
+```yaml
+directories:
+  - path: services
+    level: 1
+    # Default: each services/* must have its own CODEOWNERS entry
+  - path: internal
+    level: 1
+    match: coverage  # Opt out: parent coverage is acceptable
+```
+
+For example, if CODEOWNERS contains `/apps/ @team-apps`, a subdirectory `apps/my-service/` is covered by inheritance. With the default `exact` mode, this would fail because `apps/my-service/` lacks its own entry. With `coverage` mode, it would pass.
+
 ### Level explained
 
 | Level | Behavior | Example |
@@ -52,10 +73,13 @@ This matches `applications/a/services`, `applications/b/services`, etc., and che
 ```yaml
 directories:
   - path: services
-    level: 1        # services/auth/, services/api/, etc.
+    level: 1           # services/auth/, services/api/, etc. must each have an exact CODEOWNERS entry
   - path: libs
-    level: 2        # libs/go/utils/, libs/js/common/, etc.
-  - path: docs      # docs/ itself (level defaults to 0)
+    level: 2           # libs/go/utils/, libs/js/common/, etc.
+  - path: internal
+    level: 1
+    match: coverage    # parent CODEOWNERS coverage is acceptable
+  - path: docs         # docs/ itself (level defaults to 0)
 ```
 
 ## GitHub Action

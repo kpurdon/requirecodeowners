@@ -51,6 +51,31 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: true,
 			errMsg:  "parsing config",
 		},
+		{
+			name: "valid match exact",
+			content: `directories:
+  - path: src
+    match: exact
+`,
+			wantErr: false,
+		},
+		{
+			name: "valid match coverage",
+			content: `directories:
+  - path: src
+    match: coverage
+`,
+			wantErr: false,
+		},
+		{
+			name: "invalid match value",
+			content: `directories:
+  - path: src
+    match: invalid
+`,
+			wantErr: true,
+			errMsg:  "invalid match",
+		},
 	}
 
 	for _, tt := range tests {
@@ -388,6 +413,107 @@ internal/ @team-c
 			got := hasCodeownersCoverage(ruleset, tt.dir)
 			if got != tt.want {
 				t.Errorf("hasCodeownersCoverage(%q) = %v, want %v", tt.dir, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasExactCodeownersCoverage(t *testing.T) {
+	content := `/apps/ @team-apps
+/apps/autotune/ @team-autotune
+/services/foo/ @team-foo
+`
+	ruleset, err := codeowners.ParseFile(strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("parsing CODEOWNERS: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		dir  string
+		want bool
+	}{
+		{"dir with its own rule", "apps/autotune", true},
+		{"dir covered only by parent rule", "apps/other", false},
+		{"top-level dir with its own rule", "apps", true},
+		{"completely uncovered dir", "unknown", false},
+		{"dir with own rule no parent", "services/foo", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := hasExactCodeownersCoverage(ruleset, tt.dir)
+			if got != tt.want {
+				t.Errorf("hasExactCodeownersCoverage(%q) = %v, want %v", tt.dir, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateMatchModes(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create directory structure: apps/ with a subdirectory that has no explicit rule
+	os.MkdirAll(filepath.Join(tmpDir, "apps", "covered"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "apps", "inherited"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, ".github"), 0755)
+
+	// /apps/ covers everything under apps/, but only /apps/covered/ has an explicit rule
+	os.WriteFile(filepath.Join(tmpDir, ".github", "CODEOWNERS"), []byte(`/apps/ @team-apps
+/apps/covered/ @team-covered
+`), 0644)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	ruleset, err := loadCodeowners("")
+	if err != nil {
+		t.Fatalf("loading CODEOWNERS: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		specs    []dirSpec
+		wantErrs int
+	}{
+		{
+			name:     "exact mode (default) - inherited coverage fails",
+			specs:    []dirSpec{{Path: "apps", Level: 1}},
+			wantErrs: 1, // apps/inherited only has parent coverage
+		},
+		{
+			name:     "exact mode explicit - inherited coverage fails",
+			specs:    []dirSpec{{Path: "apps", Level: 1, Match: "exact"}},
+			wantErrs: 1,
+		},
+		{
+			name:     "coverage mode - inherited coverage passes",
+			specs:    []dirSpec{{Path: "apps", Level: 1, Match: "coverage"}},
+			wantErrs: 0, // both subdirs are covered (inherited is fine)
+		},
+		{
+			name:     "exact mode level 0 - dir with own rule passes",
+			specs:    []dirSpec{{Path: "apps/covered", Level: 0}},
+			wantErrs: 0,
+		},
+		{
+			name:     "exact mode level 0 - dir with only inherited rule fails",
+			specs:    []dirSpec{{Path: "apps/inherited", Level: 0}},
+			wantErrs: 1,
+		},
+		{
+			name:     "coverage mode level 0 - dir with only inherited rule passes",
+			specs:    []dirSpec{{Path: "apps/inherited", Level: 0, Match: "coverage"}},
+			wantErrs: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validate(tt.specs, ruleset, ".requirecodeowners.yml")
+			if len(errs) != tt.wantErrs {
+				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
 			}
 		})
 	}
