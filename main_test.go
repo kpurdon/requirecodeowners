@@ -76,6 +76,60 @@ func TestLoadConfig(t *testing.T) {
 			wantErr: true,
 			errMsg:  "invalid match",
 		},
+		{
+			name: "valid exclude with reason and owner",
+			content: `directories:
+  - path: src
+exclude:
+  - path: src/legacy
+    reason: deprecated
+    owner: "@team-x"
+`,
+			wantErr: false,
+		},
+		{
+			name: "exclude missing reason",
+			content: `directories:
+  - path: src
+exclude:
+  - path: src/legacy
+    owner: "@team-x"
+`,
+			wantErr: true,
+			errMsg:  "has no reason",
+		},
+		{
+			name: "exclude missing owner",
+			content: `directories:
+  - path: src
+exclude:
+  - path: src/legacy
+    reason: deprecated
+`,
+			wantErr: true,
+			errMsg:  "has no owner",
+		},
+		{
+			name: "exclude blank reason",
+			content: `directories:
+  - path: src
+exclude:
+  - path: src/legacy
+    reason: "   "
+`,
+			wantErr: true,
+			errMsg:  "has no reason",
+		},
+		{
+			name: "exclude missing path",
+			content: `directories:
+  - path: src
+exclude:
+  - reason: deprecated
+`,
+			wantErr: true,
+			errMsg:  "has no path",
+		},
 	}
 
 	for _, tt := range tests {
@@ -183,7 +237,7 @@ func TestValidate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := validate(tt.specs, ruleset, ".requirecodeowners.yml")
+			errs := validate(tt.specs, nil, ruleset, ".requirecodeowners.yml")
 			if len(errs) != tt.wantErrs {
 				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
 			}
@@ -247,7 +301,7 @@ func TestValidateWithLevel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := validate(tt.specs, ruleset, ".requirecodeowners.yml")
+			errs := validate(tt.specs, nil, ruleset, ".requirecodeowners.yml")
 			if len(errs) != tt.wantErrs {
 				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
 			}
@@ -297,7 +351,7 @@ func TestValidateWithGlob(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := validate(tt.specs, ruleset, ".requirecodeowners.yml")
+			errs := validate(tt.specs, nil, ruleset, ".requirecodeowners.yml")
 			if len(errs) != tt.wantErrs {
 				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
 			}
@@ -450,6 +504,133 @@ func TestHasExactCodeownersCoverage(t *testing.T) {
 	}
 }
 
+func TestValidateWithExclude(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	os.MkdirAll(filepath.Join(tmpDir, "services", "foo"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "services", "legacy", "nested"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "services", "legacy-archive"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "services", "other"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, ".github"), 0755)
+
+	os.WriteFile(filepath.Join(tmpDir, ".github", "CODEOWNERS"), []byte(`/services/foo/ @team-foo
+`), 0644)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	ruleset, err := loadCodeowners("")
+	if err != nil {
+		t.Fatalf("loading CODEOWNERS: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		specs    []dirSpec
+		excludes []excludeSpec
+		wantErrs int
+	}{
+		{
+			name:     "no excludes flags every uncovered subdir",
+			specs:    []dirSpec{{Path: "services", Level: 1}},
+			wantErrs: 3,
+		},
+		{
+			name:     "exclude prunes the named subdir but not a sibling with a shared prefix",
+			specs:    []dirSpec{{Path: "services", Level: 1}},
+			excludes: []excludeSpec{{Path: "services/legacy", Reason: "deprecated"}},
+			wantErrs: 2,
+		},
+		{
+			name:     "exclude is recursive into deeper levels",
+			specs:    []dirSpec{{Path: "services", Level: 2}},
+			excludes: []excludeSpec{{Path: "services/legacy", Reason: "deprecated"}},
+			wantErrs: 0,
+		},
+		{
+			name:     "excluding the target directory itself passes",
+			specs:    []dirSpec{{Path: "services/legacy", Level: 0}},
+			excludes: []excludeSpec{{Path: "services/legacy", Reason: "deprecated"}},
+			wantErrs: 0,
+		},
+		{
+			name:     "stale exclude matching nothing errors",
+			specs:    []dirSpec{{Path: "services/foo", Level: 0}},
+			excludes: []excludeSpec{{Path: "services/gone", Reason: "deprecated"}},
+			wantErrs: 1,
+		},
+		{
+			name:     "invalid exclude glob errors",
+			specs:    []dirSpec{{Path: "services/foo", Level: 0}},
+			excludes: []excludeSpec{{Path: "services/[", Reason: "deprecated"}},
+			wantErrs: 1,
+		},
+		{
+			name:     "excluding the repo root prunes everything beneath it",
+			specs:    []dirSpec{{Path: "services/other", Level: 0}},
+			excludes: []excludeSpec{{Path: ".", Reason: "whole tree exempt"}},
+			wantErrs: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validate(tt.specs, tt.excludes, ruleset, ".requirecodeowners.yml")
+			if len(errs) != tt.wantErrs {
+				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
+			}
+		})
+	}
+}
+
+func TestResolvedExclusionDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.MkdirAll(filepath.Join(tmpDir, "services", "foo-legacy"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "services", "bar-legacy"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "services", "keep"), 0755)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	tests := []struct {
+		name    string
+		pattern string
+		want    []string
+	}{
+		{
+			name:    "glob resolving to multiple dirs is listed",
+			pattern: "services/*-legacy",
+			want:    []string{"services/bar-legacy", "services/foo-legacy"},
+		},
+		{
+			name:    "plain path resolving to itself is not listed",
+			pattern: "services/keep",
+			want:    nil,
+		},
+		{
+			name:    "pattern matching nothing is not listed",
+			pattern: "services/*-gone",
+			want:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolvedExclusionDirs(tt.pattern)
+			if len(got) != len(tt.want) {
+				t.Fatalf("resolvedExclusionDirs(%q) = %v, want %v", tt.pattern, got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("resolvedExclusionDirs(%q)[%d] = %q, want %q", tt.pattern, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestValidateMatchModes(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -511,7 +692,7 @@ func TestValidateMatchModes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := validate(tt.specs, ruleset, ".requirecodeowners.yml")
+			errs := validate(tt.specs, nil, ruleset, ".requirecodeowners.yml")
 			if len(errs) != tt.wantErrs {
 				t.Errorf("validate() errors = %v, want %d errors", errs, tt.wantErrs)
 			}

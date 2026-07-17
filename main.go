@@ -6,19 +6,27 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/hmarr/codeowners"
 	"gopkg.in/yaml.v3"
 )
 
 type config struct {
-	Directories []dirSpec `yaml:"directories"`
+	Directories []dirSpec     `yaml:"directories"`
+	Exclude     []excludeSpec `yaml:"exclude"`
 }
 
 type dirSpec struct {
 	Path  string `yaml:"path"`
 	Level int    `yaml:"level"`
 	Match string `yaml:"match"`
+}
+
+type excludeSpec struct {
+	Path   string `yaml:"path"`
+	Reason string `yaml:"reason"`
+	Owner  string `yaml:"owner"`
 }
 
 type validationError struct {
@@ -56,13 +64,40 @@ func main() {
 		actualConfigPath = ".requirecodeowners.yml"
 	}
 
-	errors := validate(cfg.Directories, ruleset, actualConfigPath)
+	printExclusions(cfg.Exclude)
+
+	errors := validate(cfg.Directories, cfg.Exclude, ruleset, actualConfigPath)
 	if len(errors) > 0 {
 		printErrors(errors)
 		os.Exit(1)
 	}
 
 	fmt.Println("✓ all directories have CODEOWNERS coverage")
+}
+
+func printExclusions(excludes []excludeSpec) {
+	if len(excludes) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "ℹ %d %s opted out:\n", len(excludes), pluralize(len(excludes), "path", "paths"))
+	for _, e := range excludes {
+		fmt.Fprintf(os.Stderr, "  - %s (%s) — %s\n", e.Path, e.Owner, e.Reason)
+		if dirs := resolvedExclusionDirs(e.Path); len(dirs) > 0 {
+			fmt.Fprintf(os.Stderr, "      ↳ %s\n", strings.Join(dirs, ", "))
+		}
+	}
+}
+
+func resolvedExclusionDirs(pattern string) []string {
+	dirs, err := expandPath(pattern)
+	if err != nil || len(dirs) == 0 {
+		return nil
+	}
+	if len(dirs) == 1 && filepath.Clean(dirs[0]) == filepath.Clean(pattern) {
+		return nil
+	}
+	sort.Strings(dirs)
+	return dirs
 }
 
 func printErrors(errors []validationError) {
@@ -117,6 +152,18 @@ func loadConfig(path string) (*config, error) {
 		}
 		if d.Match != "" && d.Match != "exact" && d.Match != "coverage" {
 			return nil, fmt.Errorf("directory %s has invalid match %q (must be \"exact\" or \"coverage\")", d.Path, d.Match)
+		}
+	}
+
+	for i, e := range cfg.Exclude {
+		if e.Path == "" {
+			return nil, fmt.Errorf("exclude at index %d has no path", i)
+		}
+		if strings.TrimSpace(e.Reason) == "" {
+			return nil, fmt.Errorf("exclude %s has no reason (a reason is required to document why the opt-out exists)", e.Path)
+		}
+		if strings.TrimSpace(e.Owner) == "" {
+			return nil, fmt.Errorf("exclude %s has no owner (an owner is required to attribute the opt-out)", e.Path)
 		}
 	}
 
@@ -177,8 +224,11 @@ func expandPath(pattern string) ([]string, error) {
 	return dirs, nil
 }
 
-func validate(specs []dirSpec, ruleset codeowners.Ruleset, configPath string) []validationError {
+func validate(specs []dirSpec, excludes []excludeSpec, ruleset codeowners.Ruleset, configPath string) []validationError {
 	var errors []validationError
+
+	excluded, exErrs := buildExcluder(excludes, configPath)
+	errors = append(errors, exErrs...)
 
 	for _, spec := range specs {
 		matchedDirs, err := expandPath(spec.Path)
@@ -203,7 +253,7 @@ func validate(specs []dirSpec, ruleset codeowners.Ruleset, configPath string) []
 		}
 
 		for _, dir := range matchedDirs {
-			errs := validateDirectory(dir, spec.Level, matchMode, ruleset, configPath)
+			errs := validateDirectory(dir, spec.Level, matchMode, ruleset, configPath, excluded)
 			errors = append(errors, errs...)
 		}
 	}
@@ -211,8 +261,54 @@ func validate(specs []dirSpec, ruleset codeowners.Ruleset, configPath string) []
 	return errors
 }
 
-func validateDirectory(path string, level int, matchMode string, ruleset codeowners.Ruleset, configPath string) []validationError {
+func buildExcluder(excludes []excludeSpec, configPath string) (func(string) bool, []validationError) {
 	var errors []validationError
+	var roots []string
+
+	for _, e := range excludes {
+		dirs, err := expandPath(e.Path)
+		if err != nil {
+			errors = append(errors, validationError{
+				path:    e.Path,
+				message: fmt.Sprintf("Invalid exclude pattern: %v", err),
+			})
+			continue
+		}
+		if len(dirs) == 0 {
+			errors = append(errors, validationError{
+				path:    e.Path,
+				message: fmt.Sprintf("Exclude matches no directories. Remove it from %s.", configPath),
+			})
+			continue
+		}
+		for _, d := range dirs {
+			roots = append(roots, filepath.Clean(d))
+		}
+	}
+
+	excluded := func(dir string) bool {
+		dir = filepath.Clean(dir)
+		for _, r := range roots {
+			rel, err := filepath.Rel(r, dir)
+			if err != nil {
+				continue
+			}
+			if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return true
+			}
+		}
+		return false
+	}
+
+	return excluded, errors
+}
+
+func validateDirectory(path string, level int, matchMode string, ruleset codeowners.Ruleset, configPath string, excluded func(string) bool) []validationError {
+	var errors []validationError
+
+	if excluded(path) {
+		return errors
+	}
 
 	info, err := os.Stat(path)
 	if os.IsNotExist(err) {
@@ -249,6 +345,9 @@ func validateDirectory(path string, level int, matchMode string, ruleset codeown
 	}
 
 	for _, d := range dirsToCheck {
+		if excluded(d) {
+			continue
+		}
 		if matchMode == "coverage" {
 			if !hasCodeownersCoverage(ruleset, d) {
 				errors = append(errors, validationError{
