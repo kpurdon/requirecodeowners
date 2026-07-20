@@ -68,6 +68,27 @@ directories:
 
 This matches `applications/a/services`, `applications/b/services`, etc., and checks that each of their subdirectories has CODEOWNERS coverage.
 
+### Excluding directories (opt-out)
+
+Sometimes a directory intentionally has no owner — deprecated code, vendored dependencies, generated output. Add it to a top-level `exclude:` list to opt it out of the check. Each exclude needs a `path`, a `reason`, and an `owner`:
+
+```yaml
+directories:
+  - path: services
+    level: 1
+exclude:
+  - path: services/legacy
+    reason: "Deprecated, removal tracked in JIRA-123"
+    owner: "@team-platform"
+  - path: vendor
+    reason: "Third-party code, no internal ownership"
+    owner: "@alice"
+```
+
+`reason` and `owner` are both required. They keep opt-outs honest: every exclusion is documented and attributed in the config, visible in review, and printed in the CI logs. The `owner` is any non-empty string — a GitHub user or team is the natural choice. When a `path` is a glob, the log also lists the concrete directories it resolved to, so a too-broad pattern is visible at a glance.
+
+Exclusion is recursive — opting out `services/legacy` also skips everything beneath it. Paths accept the same glob syntax as `directories`. An exclude that matches no directory fails the check, so stale opt-outs don't pile up after the directory is gone.
+
 ### Full example
 
 ```yaml
